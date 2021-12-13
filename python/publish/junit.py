@@ -74,7 +74,7 @@ def get_content(results: Union[Element, List[Element]]) -> str:
     return content
 
 
-def parse_junit_xml_files(files: Iterable[str], time_factor: float = 1.0) -> ParsedUnitTestResults:
+def parse_junit_xml_files(files: Iterable[str]) -> ParsedUnitTestResults:
     """Parses junit xml files and returns aggregated statistics as a ParsedUnitTestResults."""
     def parse(path: str) -> Union[str, Any]:
         if not os.path.exists(path):
@@ -103,7 +103,7 @@ def parse_junit_xml_files(files: Iterable[str], time_factor: float = 1.0) -> Par
     suite_skipped = sum([suite.skipped + suite.disabled for result_file, suite in suites])
     suite_failures = sum([suite.failures for result_file, suite in suites])
     suite_errors = sum([suite.errors for result_file, suite in suites])
-    suite_time = int(sum([suite.time for result_file, suite in suites]) * time_factor)
+    suite_time = int(sum([suite.time for result_file, suite in suites]))
 
     def int_opt(string: Optional[str]) -> Optional[int]:
         try:
@@ -134,7 +134,7 @@ def parse_junit_xml_files(files: Iterable[str], time_factor: float = 1.0) -> Par
             result=get_result(results),
             message=get_message(results),
             content=get_content(results),
-            time=case.time * time_factor if case.time is not None else case.time
+            time=case.time
         )
         for result_file, suite in suites
         for case in get_cases(suite)
