@@ -18,6 +18,7 @@ from publish import hide_comments_modes, available_annotations, default_annotati
 from publish.github_action import GithubAction
 from publish.junit import parse_junit_xml_files
 from publish.publisher import Publisher, Settings
+from publish.retry import GitHubRetry
 from publish.unittestresults import get_test_results, get_stats, ParsedUnitTestResults
 
 logger = logging.getLogger('publish-unit-test-results')
@@ -33,14 +34,12 @@ def get_conclusion(parsed: ParsedUnitTestResults, fail_on_failures, fail_on_erro
     return 'success'
 
 
-def get_github(token: str, url: str, retries: int, backoff_factor: float) -> github.Github:
-    retry = Retry(total=retries,
-                  backoff_factor=backoff_factor,
-                  allowed_methods=Retry.DEFAULT_ALLOWED_METHODS.union({'GET', 'POST'}),
-                  # 403 is too broad to be retried, but GitHub API signals rate limits via 403
-                  # urllib3 Retry does not allow to consider the HTTP message, only status code
-                  # so we retry all 403, which will respect HTTP Retry-After header
-                  status_forcelist=[403] + list(range(500, 600)))
+def get_github(token: str, url: str, retries: int, backoff_factor: float, gha: GithubAction) -> github.Github:
+    retry = GitHubRetry(gha=gha,
+                        total=retries,
+                        backoff_factor=backoff_factor,
+                        allowed_methods=Retry.DEFAULT_ALLOWED_METHODS.union({'GET', 'POST'}),
+                        status_forcelist=list(range(500, 600)))
     return github.Github(login_or_token=token, base_url=url, per_page=100, retry=retry)
 
 
@@ -94,7 +93,7 @@ def main(settings: Settings, gha: GithubAction) -> None:
 
     # publish the delta stats
     backoff_factor = max(settings.seconds_between_github_reads, settings.seconds_between_github_writes)
-    gh = get_github(token=settings.token, url=settings.api_url, retries=settings.api_retries, backoff_factor=backoff_factor)
+    gh = get_github(token=settings.token, url=settings.api_url, retries=settings.api_retries, backoff_factor=backoff_factor, gha=gha)
     gh._Github__requester._Requester__requestRaw = throttle_gh_request_raw(
         settings.seconds_between_github_reads,
         settings.seconds_between_github_writes,
@@ -166,6 +165,33 @@ def get_var(name: str, options: dict) -> Optional[str]:
     return options.get(f'INPUT_{name}') or options.get(name) or None
 
 
+def get_bool_var(name: str, options: dict, default: bool, gha: Optional[GithubAction] = None) -> bool:
+    """
+    Same as get_var(), but checks if the value is a valid boolean.
+    Prints a warning and uses the default if the string value is not a boolean value.
+    If the value is unset, returns the default.
+    """
+    val = get_var(name, options)
+    if not val:
+        return default
+
+    val = val.lower()
+    if val == 'true':
+        return True
+    elif val == 'false':
+        return False
+    else:
+        # TODO: breaking change for version 2: raise a RuntimeError
+        message = f'Option {name.lower()} has to be boolean, so either "true" or "false": {val}'
+
+        if gha is None:
+            logger.debug(message)
+        else:
+            gha.warning(message)
+
+        return default
+
+
 def check_var(var: Union[str, List[str]],
               name: str,
               label: str,
@@ -226,6 +252,7 @@ def get_settings(options: dict, gha: Optional[GithubAction] = None) -> Settings:
                            f'{", ".join(time_factors.keys())}')
 
     check_name = get_var('CHECK_NAME', options) or 'Unit Test Results'
+    comment_on_pr = get_bool_var('COMMENT_ON_PR', options, default=True, gha=gha)
     annotations = get_annotations_config(options, event)
 
     fail_on = get_var('FAIL_ON', options) or 'test failures'
@@ -257,13 +284,13 @@ def get_settings(options: dict, gha: Optional[GithubAction] = None) -> Settings:
         time_factor=time_factor,
         check_name=check_name,
         comment_title=get_var('COMMENT_TITLE', options) or check_name,
-        comment_mode=get_var('COMMENT_MODE', options) or (comment_mode_update if get_var('COMMENT_ON_PR', options) != 'false' else comment_mode_off),
-        compare_earlier=get_var('COMPARE_TO_EARLIER_COMMIT', options) != 'false',
+        comment_mode=get_var('COMMENT_MODE', options) or (comment_mode_update if comment_on_pr else comment_mode_off),
+        compare_earlier=get_bool_var('COMPARE_TO_EARLIER_COMMIT', options, default=True, gha=gha),
         pull_request_build=get_var('PULL_REQUEST_BUILD', options) or 'merge',
         test_changes_limit=test_changes_limit,
         hide_comment_mode=get_var('HIDE_COMMENTS', options) or 'all but latest',
-        report_individual_runs=get_var('REPORT_INDIVIDUAL_RUNS', options) == 'true',
-        dedup_classes_by_file_name=get_var('DEDUPLICATE_CLASSES_BY_FILE_NAME', options) == 'true',
+        report_individual_runs=get_bool_var('REPORT_INDIVIDUAL_RUNS', options, default=False, gha=gha),
+        dedup_classes_by_file_name=get_bool_var('DEDUPLICATE_CLASSES_BY_FILE_NAME', options, default=False, gha=gha),
         check_run_annotation=annotations,
         seconds_between_github_reads=float(seconds_between_github_reads),
         seconds_between_github_writes=float(seconds_between_github_writes)

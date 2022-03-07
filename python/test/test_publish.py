@@ -1786,6 +1786,10 @@ class PublishTest(unittest.TestCase):
     def test_chunk(self):
         self.assertEqual([], chunk_test_list([], '\n', 100))
 
+        tests = [f'abcdefghijklmnopqrstu-{i}' for i in range(10)]
+        chunks = chunk_test_list(tests, '\n', 10)
+        self.assertEqual([], chunks)
+
         four_per_chunk = [['abcdefghijklmnopqrstu-0',
                            'abcdefghijklmnopqrstu-1',
                            'abcdefghijklmnopqrstu-2',
@@ -1861,6 +1865,16 @@ class PublishTest(unittest.TestCase):
         md = get_long_summary_md(stats)
         self.assertEqual(md, (f'1 files  1 suites   0s {duration_label_md}\n'
                               f'0 {all_tests_label_md} 0 {passed_tests_label_md} 0 {skipped_tests_label_md} 0 {failed_tests_label_md}\n'
+                              f'\n'
+                              f'Results for commit a commit.\n'))
+
+    def test_file_without_cases_but_with_tests(self):
+        parsed = parse_junit_xml_files(['files/no-cases-but-tests.xml']).with_commit('a commit sha')
+        results = get_test_results(parsed, False)
+        stats = get_stats(results)
+        md = get_long_summary_md(stats)
+        self.assertEqual(md, (f'1 files  1 suites   0s {duration_label_md}\n'
+                              f'6 {all_tests_label_md} 3 {passed_tests_label_md} 2 {skipped_tests_label_md} 1 {failed_tests_label_md}\n'
                               f'\n'
                               f'Results for commit a commit.\n'))
 

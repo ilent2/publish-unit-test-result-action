@@ -7,6 +7,9 @@ on:
     tags:
       - '*'
   pull_request:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
@@ -26,22 +29,29 @@ jobs:
           - windows-2019
           - windows-2022
           - windows-latest
-        python-version: [3.8]
+        python-version: ["3.8"]
 
         include:
           - os: macos-latest
-            python-version: 3.7
+            python-version: "3.10"
           - os: ubuntu-latest
-            python-version: 3.7
+            python-version: "3.10"
           - os: windows-latest
-            python-version: 3.7
+            python-version: "3.10"
 
           - os: macos-latest
-            python-version: 3.6
+            python-version: "3.9"
           - os: ubuntu-latest
-            python-version: 3.6
+            python-version: "3.9"
           - os: windows-latest
-            python-version: 3.6
+            python-version: "3.9"
+
+          - os: macos-latest
+            python-version: "3.7"
+          - os: ubuntu-latest
+            python-version: "3.7"
+          - os: windows-latest
+            python-version: "3.7"
 
     steps:
       - name: Setup Ubuntu
@@ -70,6 +80,22 @@ jobs:
         run: |
           cd python/test
           python -m pytest --capture=tee-sys --continue-on-collection-errors --junit-xml ../../test-results/pytest.xml
+
+      - name: PyTest (EST)
+        env:
+          TZ: US/Eastern
+          PYTHONPATH: ..
+        run: |
+          cd python/test
+          python -m pytest --capture=tee-sys --continue-on-collection-errors --junit-xml ../../test-results/pytest-est.xml
+
+      - name: PyTest (AEST)
+        env:
+          TZ: Australia/Canberra
+          PYTHONPATH: ..
+        run: |
+          cd python/test
+          python -m pytest --capture=tee-sys --continue-on-collection-errors --junit-xml ../../test-results/pytest-aest.xml
 
       - name: Upload Test Results
         if: always()
@@ -134,6 +160,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v2
         with:
+          load: true
           push: false
           tags: enricomi/publish-unit-test-result-action:latest
           outputs: type=docker
@@ -151,6 +178,24 @@ jobs:
           INPUT_GITHUB_TOKEN: ${{ github.token }}
           INPUT_CHECK_NAME: Unit Test Results (Docker Image)
           INPUT_FILES: "artifacts/**/*.xml"
+
+      - name: Scan for vulnerabilities
+        id: scan
+        uses: crazy-max/ghaction-container-scan@v1
+        with:
+          image: enricomi/publish-unit-test-result-action:latest
+          dockerfile: ./Dockerfile
+          annotations: true
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: SARIF
+          path: ${{ steps.scan.outputs.sarif }}
+      - name: Upload SARIF file
+        if: always() && steps.scan.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
 
   publish-composite:
     name: Publish Unit Test Results (${{ matrix.os-label }})
